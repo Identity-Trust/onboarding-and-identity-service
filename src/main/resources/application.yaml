@@ -10,3 +10,7 @@ management:
     web:
       exposure:
         include: health,info
+
+services:
+  authentication:
+    url: http://localhost:8082
