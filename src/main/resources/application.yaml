@@ -1,6 +1,11 @@
 spring:
   application:
     name: onboarding-and-identity-service
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://${DB_HOST:10.212.10.135}:${DB_PORT:5432}/${DB_NAME:identity}}
+    username: ${DB_USERNAME:postgres}
+    password: ${DB_PASSWORD}
+    driver-class-name: org.postgresql.Driver
 
 server:
   port: 8081
@@ -14,3 +19,12 @@ management:
 services:
   authentication:
     url: http://localhost:8082
+
+keycloak:
+  admin:
+    base-url: ${KEYCLOAK_URL:http://localhost:8085}
+    realm: ${KEYCLOAK_REALM:identity-os}
+    admin-realm: ${KEYCLOAK_ADMIN_REALM:master}
+    client-id: ${KEYCLOAK_ADMIN_CLIENT_ID:admin-cli}
+    username: ${KEYCLOAK_ADMIN_USERNAME:admin}
+    password: ${KEYCLOAK_ADMIN_PASSWORD:admin}

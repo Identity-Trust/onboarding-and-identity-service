@@ -6,6 +6,7 @@ import org.springframework.web.client.RestClient;
 
 import com.identityos.onboarding_and_identity_service.dto.CreateIdentityRequest;
 import com.identityos.onboarding_and_identity_service.dto.CreateIdentityResponse;
+import org.springframework.http.MediaType;
 
 @Component
 public class AuthenticationClient {
@@ -22,13 +23,17 @@ public class AuthenticationClient {
     }
 
     public CreateIdentityResponse createIdentity(
-            CreateIdentityRequest request) {
+        CreateIdentityRequest request,
+        String authorization) {
 
-        return restClient
-                .post()
-                .uri("/internal/v1/identities")
-                .body(request)
-                .retrieve()
-                .body(CreateIdentityResponse.class);
+    return restClient
+            .post()
+            .uri("/internal/v1/identities")
+            .header("Authorization", authorization)
+            .contentType(MediaType.APPLICATION_JSON)
+            .body(request)
+            .retrieve()
+            .body(CreateIdentityResponse.class);
     }
+
 }
