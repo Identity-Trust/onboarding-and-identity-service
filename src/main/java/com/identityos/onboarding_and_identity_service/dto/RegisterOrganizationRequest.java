@@ -24,6 +24,17 @@ public record RegisterOrganizationRequest(
         String logoUrl,
         @NotBlank String representativeName,
         @NotBlank @Email String representativeEmail,
+        String representativeMobile,
+        String representativeDesignation,
+        String representativeEmployeeId,
+        String addressType,
+        String addressLine1,
+        String addressLine2,
+        String city,
+        String district,
+        String state,
+        String postalCode,
+        String addressProofRef,
         UUID approvedBy
 ) {
 }
