@@ -3,11 +3,17 @@ package com.identityos.onboarding_and_identity_service.repository;
 import com.identityos.onboarding_and_identity_service.dto.RegisterOrganizationRequest;
 import com.identityos.onboarding_and_identity_service.dto.ApplicationRegistrationRequest;
 import com.identityos.onboarding_and_identity_service.dto.ApplicationResponse;
+import com.identityos.onboarding_and_identity_service.dto.IdentitySchemaVersionRequest;
+import com.identityos.onboarding_and_identity_service.dto.IdentitySchemaVersionResponse;
 import com.identityos.onboarding_and_identity_service.dto.OrganizationProfileResponse;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Repository;
 
+import java.security.SecureRandom;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -15,9 +21,12 @@ import java.util.UUID;
 @Repository
 public class OrganizationRepository {
     private final JdbcTemplate jdbcTemplate;
+    private final ObjectMapper objectMapper;
+    private final SecureRandom secureRandom = new SecureRandom();
 
-    public OrganizationRepository(JdbcTemplate jdbcTemplate) {
+    public OrganizationRepository(JdbcTemplate jdbcTemplate, ObjectMapper objectMapper) {
         this.jdbcTemplate = jdbcTemplate;
+        this.objectMapper = objectMapper;
     }
 
     public void insert(RegisterOrganizationRequest request, String organizationId) {
@@ -182,6 +191,8 @@ public class OrganizationRepository {
                     resultSet.getString("application_type"),
                     resultSet.getString("description"),
                     resultSet.getString("redirect_uri"),
+                    null,
+                    null,
                     resultSet.getString("status"),
                     resultSet.getBigDecimal("trust_score"),
                     resultSet.getTimestamp("created_at").toLocalDateTime()),
@@ -199,9 +210,10 @@ public class OrganizationRepository {
             return jdbcTemplate.query("""
                     SELECT a.id, o.organization_id, o.organization_name, a.application_id,
                            a.application_name, a.application_type, a.description, a.redirect_uri,
-                           a.status, a.trust_score, a.created_at
+                           c.client_id, c.client_secret, a.status, a.trust_score, a.created_at
                     FROM applications a
                     JOIN organizations o ON o.id = a.organization_id
+                    LEFT JOIN application_clients c ON c.application_id = a.id AND c.active = TRUE
                     ORDER BY a.created_at DESC
                     """, applicationRowMapper());
         }
@@ -209,15 +221,16 @@ public class OrganizationRepository {
         return jdbcTemplate.query("""
                 SELECT a.id, o.organization_id, o.organization_name, a.application_id,
                        a.application_name, a.application_type, a.description, a.redirect_uri,
-                       a.status, a.trust_score, a.created_at
+                       c.client_id, c.client_secret, a.status, a.trust_score, a.created_at
                 FROM applications a
                 JOIN organizations o ON o.id = a.organization_id
+                LEFT JOIN application_clients c ON c.application_id = a.id AND c.active = TRUE
                 WHERE o.organization_id = ?
                 ORDER BY a.created_at DESC
                 """, applicationRowMapper(), organizationId);
     }
 
-    public void updateApplicationStatus(String applicationId, String decision) {
+    public ApplicationResponse updateApplicationStatus(String applicationId, String decision) {
         String status = "APPROVED".equalsIgnoreCase(decision) || "ACTIVE".equalsIgnoreCase(decision)
                 ? "ACTIVE"
                 : "SUSPENDED";
@@ -226,6 +239,264 @@ public class OrganizationRepository {
                 SET status = ?, updated_at = CURRENT_TIMESTAMP
                 WHERE application_id = ?
                 """, status, applicationId);
+        if ("ACTIVE".equals(status)) {
+            ensureApplicationClient(applicationId);
+        }
+        return findApplicationByApplicationId(applicationId).orElseThrow();
+    }
+
+    public Optional<ApplicationResponse> findApplicationByApplicationId(String applicationId) {
+        return jdbcTemplate.query("""
+                SELECT a.id, o.organization_id, o.organization_name, a.application_id,
+                       a.application_name, a.application_type, a.description, a.redirect_uri,
+                       a.application_id AS client_id, NULL AS client_secret,
+                       a.status, a.trust_score, a.created_at
+                FROM applications a
+                JOIN organizations o ON o.id = a.organization_id
+                WHERE a.application_id = ?
+                """, resultSet -> resultSet.next()
+                ? Optional.of(applicationRowMapper().mapRow(resultSet, 0))
+                : Optional.empty(), applicationId);
+    }
+
+    public Optional<ApplicationResponse> findApplicationByClientId(String clientId) {
+        Optional<ApplicationResponse> application = findApplicationByApplicationId(clientId);
+        if (application.isPresent()) {
+            return application;
+        }
+        return jdbcTemplate.query("""
+                SELECT a.id, o.organization_id, o.organization_name, a.application_id,
+                       a.application_name, a.application_type, a.description, a.redirect_uri,
+                       c.client_id, c.client_secret, a.status, a.trust_score, a.created_at
+                FROM application_clients c
+                JOIN applications a ON a.id = c.application_id
+                JOIN organizations o ON o.id = a.organization_id
+                WHERE c.client_id = ?
+                  AND c.active = TRUE
+                """, resultSet -> resultSet.next()
+                ? Optional.of(applicationRowMapper().mapRow(resultSet, 0))
+                : Optional.empty(), clientId);
+    }
+
+    private void ensureApplicationClient(String applicationId) {
+        UUID applicationUuid = jdbcTemplate.queryForObject("""
+                SELECT id FROM applications WHERE application_id = ?
+                """, UUID.class, applicationId);
+        Integer existing = jdbcTemplate.queryForObject("""
+                SELECT COUNT(*) FROM application_clients WHERE application_id = ? AND active = TRUE
+                """, Integer.class, applicationUuid);
+        if (existing != null && existing > 0) {
+            return;
+        }
+        jdbcTemplate.update("""
+                INSERT INTO application_clients (application_id, client_id, client_secret, active)
+                VALUES (?, ?, ?, TRUE)
+                """, applicationUuid, applicationId, generateClientSecret());
+    }
+
+    private String generateClientSecret() {
+        byte[] bytes = new byte[32];
+        secureRandom.nextBytes(bytes);
+        return "sec_" + HexFormat.of().formatHex(bytes);
+    }
+
+    public IdentitySchemaVersionResponse createSchemaVersion(
+            String organizationId,
+            String applicationId,
+            IdentitySchemaVersionRequest request) {
+        UUID organizationUuid = jdbcTemplate.queryForObject("""
+                SELECT id FROM organizations WHERE organization_id = ?
+                """, UUID.class, organizationId);
+        UUID applicationUuid = jdbcTemplate.queryForObject("""
+                SELECT id FROM applications WHERE application_id = ? AND organization_id = ?
+                """, UUID.class, applicationId, organizationUuid);
+        UUID schemaUuid = findOrCreateSchema(organizationUuid, applicationUuid, request);
+        Integer versionNumber = jdbcTemplate.queryForObject("""
+                SELECT COALESCE(MAX(version_number), 0) + 1
+                FROM identity_schema_version
+                WHERE schema_id = ?
+                """, Integer.class, schemaUuid);
+        String versionStatus = Boolean.TRUE.equals(request.submitForApproval()) ? "SUBMITTED" : "DRAFT";
+
+        IdentitySchemaVersionResponse response = jdbcTemplate.queryForObject("""
+                INSERT INTO identity_schema_version (
+                    schema_id, version_number, schema_json, configuration_json,
+                    status, change_summary, created_by
+                ) VALUES (?, ?, CAST(? AS jsonb), CAST(? AS jsonb), ?, ?, ?)
+                RETURNING id
+                """, (resultSet, rowNum) -> findSchemaVersionByVersionId(resultSet.getString("id")).orElseThrow(),
+                schemaUuid,
+                versionNumber,
+                jsonb(request.schemaJson()),
+                request.configurationJson() == null ? null : jsonb(request.configurationJson()),
+                versionStatus,
+                request.changeSummary(),
+                organizationUuid);
+
+        jdbcTemplate.update("""
+                INSERT INTO schema_version_change (
+                    schema_id, from_version_id, to_version_id, change_type, change_details, changed_by
+                ) VALUES (?, NULL, ?, ?, CAST(? AS jsonb), ?)
+                """,
+                schemaUuid,
+                UUID.fromString(response.versionId()),
+                versionNumber == 1 ? "INITIAL_VERSION" : "NEW_VERSION",
+                jsonb(java.util.Map.of("summary", blankToDefault(request.changeSummary(), "Schema version created"))),
+                organizationUuid);
+
+        if (Boolean.TRUE.equals(request.submitForApproval())) {
+            jdbcTemplate.update("""
+                    INSERT INTO schema_version_approval (schema_version_id, submitted_by, status)
+                    VALUES (?, ?, 'PENDING')
+                    """, UUID.fromString(response.versionId()), organizationUuid);
+        }
+
+        return response;
+    }
+
+    public List<IdentitySchemaVersionResponse> findSchemas(String organizationId, String applicationId) {
+        if ((organizationId == null || organizationId.isBlank()) && (applicationId == null || applicationId.isBlank())) {
+            return jdbcTemplate.query(schemaListSql("""
+                    WHERE v.version_number = (
+                        SELECT MAX(version_number) FROM identity_schema_version WHERE schema_id = s.id
+                    )
+                    """), schemaVersionRowMapper());
+        }
+        if (applicationId == null || applicationId.isBlank()) {
+            return jdbcTemplate.query(schemaListSql("""
+                    WHERE o.organization_id = ?
+                      AND v.version_number = (
+                          SELECT MAX(version_number) FROM identity_schema_version WHERE schema_id = s.id
+                      )
+                    """), schemaVersionRowMapper(), organizationId);
+        }
+        return jdbcTemplate.query(schemaListSql("""
+                WHERE o.organization_id = ?
+                  AND a.application_id = ?
+                  AND v.version_number = (
+                      SELECT MAX(version_number) FROM identity_schema_version WHERE schema_id = s.id
+                  )
+                """), schemaVersionRowMapper(), organizationId, applicationId);
+    }
+
+    public Optional<IdentitySchemaVersionResponse> findApprovedSchemaForClient(String clientId, String schemaType) {
+        return jdbcTemplate.query("""
+                SELECT s.id AS schema_id, v.id AS version_id,
+                       o.organization_id, o.organization_name,
+                       a.application_id, a.application_name,
+                       s.schema_type, s.schema_name, v.version_number,
+                       v.schema_json::text AS schema_json,
+                       v.configuration_json::text AS configuration_json,
+                       v.status, v.change_summary, v.created_at, v.published_at
+                FROM identity_schema s
+                JOIN organizations o ON o.id = s.organization_id
+                JOIN applications a ON a.id = s.application_id
+                JOIN identity_schema_version v ON v.schema_id = s.id
+                LEFT JOIN application_clients c ON c.application_id = a.id AND c.active = TRUE
+                WHERE (a.application_id = ? OR c.client_id = ?)
+                  AND s.schema_type = ?
+                  AND v.status IN ('APPROVED', 'PUBLISHED')
+                ORDER BY
+                  CASE WHEN s.active_version_id = v.id THEN 0 ELSE 1 END,
+                  v.published_at DESC NULLS LAST,
+                  v.version_number DESC
+                LIMIT 1
+                """, resultSet -> resultSet.next()
+                ? Optional.of(schemaVersionRowMapper().mapRow(resultSet, 0))
+                : Optional.empty(), clientId, clientId, schemaType.toUpperCase());
+    }
+
+    public void updateSchemaVersionApproval(String versionId, String decision, String comments) {
+        String normalizedDecision = decision == null ? "REJECTED" : decision.toUpperCase();
+        String versionStatus = switch (normalizedDecision) {
+            case "APPROVED" -> "APPROVED";
+            case "CHANGES_REQUESTED" -> "DRAFT";
+            default -> "REJECTED";
+        };
+        String approvalStatus = switch (normalizedDecision) {
+            case "APPROVED" -> "APPROVED";
+            case "CHANGES_REQUESTED" -> "CHANGES_REQUESTED";
+            default -> "REJECTED";
+        };
+        UUID versionUuid = UUID.fromString(versionId);
+        jdbcTemplate.update("""
+                UPDATE identity_schema_version
+                SET status = ?, published_at = CASE WHEN ? = 'APPROVED' THEN CURRENT_TIMESTAMP ELSE published_at END
+                WHERE id = ?
+                """, versionStatus, versionStatus, versionUuid);
+        jdbcTemplate.update("""
+                UPDATE schema_version_approval
+                SET status = ?, comments = ?, reviewed_at = CURRENT_TIMESTAMP
+                WHERE schema_version_id = ?
+                """, approvalStatus, comments, versionUuid);
+        if ("APPROVED".equals(versionStatus)) {
+            jdbcTemplate.update("""
+                    UPDATE identity_schema
+                    SET active_version_id = ?, updated_at = CURRENT_TIMESTAMP
+                    WHERE id = (SELECT schema_id FROM identity_schema_version WHERE id = ?)
+                    """, versionUuid, versionUuid);
+        }
+    }
+
+    private UUID findOrCreateSchema(UUID organizationUuid, UUID applicationUuid, IdentitySchemaVersionRequest request) {
+        List<UUID> existing = jdbcTemplate.query("""
+                SELECT id
+                FROM identity_schema
+                WHERE organization_id = ?
+                  AND application_id = ?
+                  AND schema_type = ?
+                  AND schema_name = ?
+                """, (resultSet, rowNum) -> (UUID) resultSet.getObject("id"),
+                organizationUuid,
+                applicationUuid,
+                request.schemaType().toUpperCase(),
+                request.schemaName());
+        if (!existing.isEmpty()) {
+            return existing.get(0);
+        }
+        return jdbcTemplate.queryForObject("""
+                INSERT INTO identity_schema (
+                    organization_id, application_id, schema_type, schema_name, created_by
+                ) VALUES (?, ?, ?, ?, ?)
+                RETURNING id
+                """, UUID.class,
+                organizationUuid,
+                applicationUuid,
+                request.schemaType().toUpperCase(),
+                request.schemaName(),
+                organizationUuid);
+    }
+
+    private Optional<IdentitySchemaVersionResponse> findSchemaVersionByVersionId(String versionId) {
+        return jdbcTemplate.query(schemaListSql("WHERE v.id = ?"), resultSet -> resultSet.next()
+                ? Optional.of(schemaVersionRowMapper().mapRow(resultSet, 0))
+                : Optional.empty(), UUID.fromString(versionId));
+    }
+
+    private String schemaListSql(String whereClause) {
+        return """
+                SELECT s.id AS schema_id, v.id AS version_id,
+                       o.organization_id, o.organization_name,
+                       a.application_id, a.application_name,
+                       s.schema_type, s.schema_name, v.version_number,
+                       v.schema_json::text AS schema_json,
+                       v.configuration_json::text AS configuration_json,
+                       v.status, v.change_summary, v.created_at, v.published_at
+                FROM identity_schema s
+                JOIN organizations o ON o.id = s.organization_id
+                JOIN applications a ON a.id = s.application_id
+                JOIN identity_schema_version v ON v.schema_id = s.id
+                %s
+                ORDER BY v.created_at DESC
+                """.formatted(whereClause);
+    }
+
+    private String jsonb(Object value) {
+        try {
+            return objectMapper.writeValueAsString(value);
+        } catch (JsonProcessingException exception) {
+            throw new IllegalArgumentException("Invalid schema JSON", exception);
+        }
     }
 
     private RowMapper<OrganizationProfileResponse> organizationRowMapper() {
@@ -257,8 +528,29 @@ public class OrganizationRepository {
                 resultSet.getString("application_type"),
                 resultSet.getString("description"),
                 resultSet.getString("redirect_uri"),
+                resultSet.getString("client_id"),
+                resultSet.getString("client_secret"),
                 resultSet.getString("status"),
                 resultSet.getBigDecimal("trust_score"),
                 resultSet.getTimestamp("created_at").toLocalDateTime());
+    }
+
+    private RowMapper<IdentitySchemaVersionResponse> schemaVersionRowMapper() {
+        return (resultSet, rowNum) -> new IdentitySchemaVersionResponse(
+                resultSet.getString("schema_id"),
+                resultSet.getString("version_id"),
+                resultSet.getString("organization_id"),
+                resultSet.getString("organization_name"),
+                resultSet.getString("application_id"),
+                resultSet.getString("application_name"),
+                resultSet.getString("schema_type"),
+                resultSet.getString("schema_name"),
+                resultSet.getInt("version_number"),
+                resultSet.getString("schema_json"),
+                resultSet.getString("configuration_json"),
+                resultSet.getString("status"),
+                resultSet.getString("change_summary"),
+                resultSet.getTimestamp("created_at").toLocalDateTime(),
+                resultSet.getTimestamp("published_at") == null ? null : resultSet.getTimestamp("published_at").toLocalDateTime());
     }
 }

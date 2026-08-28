@@ -12,6 +12,8 @@ public record ApplicationResponse(
         String applicationType,
         String description,
         String redirectUri,
+        String clientId,
+        String clientSecret,
         String status,
         BigDecimal trustScore,
         LocalDateTime createdAt

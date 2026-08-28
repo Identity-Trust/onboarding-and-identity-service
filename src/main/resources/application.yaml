@@ -6,6 +6,10 @@ spring:
     username: ${DB_USERNAME:postgres}
     password: ${DB_PASSWORD}
     driver-class-name: org.postgresql.Driver
+    hikari:
+      connection-timeout: 5000
+      validation-timeout: 3000
+      initialization-fail-timeout: 0
   mail:
     host: ${MAIL_HOST:localhost}
     port: ${MAIL_PORT:1025}
@@ -34,6 +38,7 @@ keycloak:
     target-realm: ${KEYCLOAK_TARGET_REALM:identity-os}
     admin-realm: ${KEYCLOAK_ADMIN_REALM:master}
     client-id: ${KEYCLOAK_ADMIN_CLIENT_ID:admin-cli}
+    user-client-id: ${KEYCLOAK_USER_CLIENT_ID:identity-os-app-users}
     username: ${KEYCLOAK_ADMIN_USERNAME:admin}
     password: ${KEYCLOAK_ADMIN_PASSWORD:admin}
 

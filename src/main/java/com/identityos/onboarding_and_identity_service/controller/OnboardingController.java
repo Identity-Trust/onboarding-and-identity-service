@@ -10,11 +10,17 @@ import com.identityos.onboarding_and_identity_service.dto.ApplicationRegistratio
 import com.identityos.onboarding_and_identity_service.dto.ApplicationResponse;
 import com.identityos.onboarding_and_identity_service.dto.CreateIdentityRequest;
 import com.identityos.onboarding_and_identity_service.dto.CreateIdentityResponse;
+import com.identityos.onboarding_and_identity_service.dto.HostedIdentityAuthResponse;
+import com.identityos.onboarding_and_identity_service.dto.HostedIdentityLoginRequest;
+import com.identityos.onboarding_and_identity_service.dto.HostedIdentityRegisterRequest;
+import com.identityos.onboarding_and_identity_service.dto.IdentitySchemaVersionRequest;
+import com.identityos.onboarding_and_identity_service.dto.IdentitySchemaVersionResponse;
 import com.identityos.onboarding_and_identity_service.dto.OrganizationAdminSyncResponse;
 import com.identityos.onboarding_and_identity_service.dto.OrganizationProfileResponse;
 import com.identityos.onboarding_and_identity_service.dto.RegisterOrganizationRequest;
 import com.identityos.onboarding_and_identity_service.dto.RegisterOrganizationResponse;
 import com.identityos.onboarding_and_identity_service.repository.OrganizationRepository;
+import com.identityos.onboarding_and_identity_service.service.HostedIdentityService;
 import com.identityos.onboarding_and_identity_service.service.OrganizationRegistrationService;
 
 import java.util.List;
@@ -24,16 +30,40 @@ import java.util.List;
 public class OnboardingController {
 
     private final AuthenticationClient authenticationClient;
+    private final HostedIdentityService hostedIdentityService;
     private final OrganizationRegistrationService organizationRegistrationService;
     private final OrganizationRepository organizationRepository;
 
     public OnboardingController(
             AuthenticationClient authenticationClient,
+            HostedIdentityService hostedIdentityService,
             OrganizationRegistrationService organizationRegistrationService,
             OrganizationRepository organizationRepository) {
         this.authenticationClient = authenticationClient;
+        this.hostedIdentityService = hostedIdentityService;
         this.organizationRegistrationService = organizationRegistrationService;
         this.organizationRepository = organizationRepository;
+    }
+
+    @PostMapping("/identity/register")
+    public ResponseEntity<HostedIdentityAuthResponse> registerHostedIdentity(
+            @Valid @RequestBody HostedIdentityRegisterRequest request) {
+        return ResponseEntity.ok(hostedIdentityService.register(request));
+    }
+
+    @PostMapping("/identity/login")
+    public ResponseEntity<HostedIdentityAuthResponse> loginHostedIdentity(
+            @Valid @RequestBody HostedIdentityLoginRequest request) {
+        return ResponseEntity.ok(hostedIdentityService.login(request));
+    }
+
+    @GetMapping("/identity/schema")
+    public ResponseEntity<IdentitySchemaVersionResponse> getHostedIdentitySchema(
+            @RequestParam String clientId,
+            @RequestParam String schemaType) {
+        return organizationRepository.findApprovedSchemaForClient(clientId, schemaType)
+                .map(ResponseEntity::ok)
+                .orElseGet(() -> ResponseEntity.notFound().build());
     }
 
     @PostMapping("/organizations")
@@ -83,11 +113,41 @@ public class OnboardingController {
         return ResponseEntity.ok(organizationRepository.findApplications(organizationId));
     }
 
+    @GetMapping("/applications/client/{clientId}")
+    public ResponseEntity<ApplicationResponse> getApplicationByClientId(
+            @PathVariable String clientId) {
+        return organizationRepository.findApplicationByClientId(clientId)
+                .map(ResponseEntity::ok)
+                .orElseGet(() -> ResponseEntity.notFound().build());
+    }
+
     @PostMapping("/applications/{applicationId}/approval")
-    public ResponseEntity<Void> updateApplicationApproval(
+    public ResponseEntity<ApplicationResponse> updateApplicationApproval(
             @PathVariable String applicationId,
             @Valid @RequestBody ApprovalRequest request) {
-        organizationRepository.updateApplicationStatus(applicationId, request.decision());
+        return ResponseEntity.ok(organizationRepository.updateApplicationStatus(applicationId, request.decision()));
+    }
+
+    @PostMapping("/organizations/{organizationId}/applications/{applicationId}/schemas")
+    public ResponseEntity<IdentitySchemaVersionResponse> createSchemaVersion(
+            @PathVariable String organizationId,
+            @PathVariable String applicationId,
+            @Valid @RequestBody IdentitySchemaVersionRequest request) {
+        return ResponseEntity.ok(organizationRepository.createSchemaVersion(organizationId, applicationId, request));
+    }
+
+    @GetMapping("/schemas")
+    public ResponseEntity<List<IdentitySchemaVersionResponse>> listSchemas(
+            @RequestParam(required = false) String organizationId,
+            @RequestParam(required = false) String applicationId) {
+        return ResponseEntity.ok(organizationRepository.findSchemas(organizationId, applicationId));
+    }
+
+    @PostMapping("/schemas/versions/{versionId}/approval")
+    public ResponseEntity<Void> updateSchemaVersionApproval(
+            @PathVariable String versionId,
+            @Valid @RequestBody ApprovalRequest request) {
+        organizationRepository.updateSchemaVersionApproval(versionId, request.decision(), null);
         return ResponseEntity.noContent().build();
     }
 
