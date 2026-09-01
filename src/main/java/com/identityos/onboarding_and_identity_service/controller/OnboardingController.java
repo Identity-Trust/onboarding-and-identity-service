@@ -75,6 +75,16 @@ public class OnboardingController {
     @GetMapping("/organizations/{organizationId}")
     public ResponseEntity<OrganizationProfileResponse> getOrganization(
             @PathVariable String organizationId) {
+        return getOrganizationProfileResponse(organizationId);
+    }
+
+    @GetMapping("/organizations/{organizationId}/profile")
+    public ResponseEntity<OrganizationProfileResponse> getOrganizationProfile(
+            @PathVariable String organizationId) {
+        return getOrganizationProfileResponse(organizationId);
+    }
+
+    private ResponseEntity<OrganizationProfileResponse> getOrganizationProfileResponse(String organizationId) {
         return organizationRepository.findByOrganizationId(organizationId)
                 .map(ResponseEntity::ok)
                 .orElseGet(() -> ResponseEntity.notFound().build());

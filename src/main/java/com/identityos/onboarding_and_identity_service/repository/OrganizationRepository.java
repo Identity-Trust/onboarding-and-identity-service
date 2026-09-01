@@ -104,12 +104,35 @@ public class OrganizationRepository {
 
     public Optional<OrganizationProfileResponse> findByOrganizationId(String organizationId) {
         return jdbcTemplate.query("""
-                SELECT organization_id, organization_name, organization_type, country_code,
-                       official_email, official_phone, registration_number, registration_authority,
-                       verification_id_type, verification_id, verification_id_verify_status,
-                       website_url, logo_url, status, approval_status
-                FROM organizations
-                WHERE organization_id = ?
+                SELECT o.organization_id, o.organization_name, o.organization_type, o.country_code,
+                       o.official_email, o.official_phone, o.registration_number, o.registration_authority,
+                       o.verification_id_type, o.verification_id, o.verification_id_verify_status,
+                       o.website_url, o.logo_url, o.status, o.approval_status,
+                       r.first_name AS representative_first_name,
+                       r.last_name AS representative_last_name,
+                       r.designation AS representative_designation,
+                       r.email AS representative_email,
+                       r.mobile_number AS representative_mobile_number,
+                       r.emp_id AS representative_employee_id,
+                       a.address_type, a.address_line_1, a.address_line_2,
+                       a.city, a.district, a.state, a.postal_code,
+                       a.country_code AS address_country_code,
+                       a.address_proof_ref
+                FROM organizations o
+                LEFT JOIN LATERAL (
+                    SELECT first_name, last_name, designation, email, mobile_number, emp_id
+                    FROM organization_representatives
+                    WHERE organization_id = o.id
+                    LIMIT 1
+                ) r ON TRUE
+                LEFT JOIN LATERAL (
+                    SELECT address_type, address_line_1, address_line_2, city, district,
+                           state, postal_code, country_code, address_proof_ref
+                    FROM organization_addresses
+                    WHERE organization_id = o.id
+                    LIMIT 1
+                ) a ON TRUE
+                WHERE o.organization_id = ?
                 """, resultSet -> resultSet.next()
                 ? Optional.of(new OrganizationProfileResponse(
                     resultSet.getString("organization_id"),
@@ -126,7 +149,22 @@ public class OrganizationRepository {
                     resultSet.getString("website_url"),
                     resultSet.getString("logo_url"),
                     resultSet.getString("status"),
-                    resultSet.getString("approval_status")))
+                    resultSet.getString("approval_status"),
+                    resultSet.getString("representative_first_name"),
+                    resultSet.getString("representative_last_name"),
+                    resultSet.getString("representative_designation"),
+                    resultSet.getString("representative_email"),
+                    resultSet.getString("representative_mobile_number"),
+                    resultSet.getString("representative_employee_id"),
+                    resultSet.getString("address_type"),
+                    resultSet.getString("address_line_1"),
+                    resultSet.getString("address_line_2"),
+                    resultSet.getString("city"),
+                    resultSet.getString("district"),
+                    resultSet.getString("state"),
+                    resultSet.getString("postal_code"),
+                    resultSet.getString("address_country_code"),
+                    resultSet.getString("address_proof_ref")))
                 : Optional.empty(), organizationId);
     }
 
