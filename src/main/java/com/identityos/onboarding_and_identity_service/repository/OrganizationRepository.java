@@ -412,9 +412,21 @@ public class OrganizationRepository {
                 WHERE o.organization_id = ?
                   AND a.application_id = ?
                   AND v.version_number = (
-                      SELECT MAX(version_number) FROM identity_schema_version WHERE schema_id = s.id
-                  )
+                  SELECT MAX(version_number) FROM identity_schema_version WHERE schema_id = s.id
+                )
                 """), schemaVersionRowMapper(), organizationId, applicationId);
+    }
+
+    public List<IdentitySchemaVersionResponse> findSchemaVersions(String organizationId, String schemaType) {
+        if (schemaType == null || schemaType.isBlank()) {
+            return jdbcTemplate.query(schemaHistorySql("""
+                    WHERE o.organization_id = ?
+                    """), schemaVersionRowMapper(), organizationId);
+        }
+        return jdbcTemplate.query(schemaHistorySql("""
+                WHERE o.organization_id = ?
+                  AND s.schema_type = ?
+                """), schemaVersionRowMapper(), organizationId, schemaType.toUpperCase());
     }
 
     public Optional<IdentitySchemaVersionResponse> findApprovedSchemaForClient(String clientId, String schemaType) {
@@ -526,6 +538,33 @@ public class OrganizationRepository {
                 JOIN identity_schema_version v ON v.schema_id = s.id
                 %s
                 ORDER BY v.created_at DESC
+                """.formatted(whereClause);
+    }
+
+    private String schemaHistorySql(String whereClause) {
+        return """
+                SELECT s.id AS schema_id, v.id AS version_id,
+                       o.organization_id, o.organization_name,
+                       a.application_id, a.application_name,
+                       s.schema_type, s.schema_name, v.version_number,
+                       v.schema_json::text AS schema_json,
+                       v.configuration_json::text AS configuration_json,
+                       COALESCE(approval.status, v.status) AS status,
+                       COALESCE(v.change_summary, version_change.change_type) AS change_summary,
+                       v.created_at, v.published_at
+                FROM identity_schema s
+                JOIN organizations o ON o.id = s.organization_id
+                JOIN applications a ON a.id = s.application_id
+                JOIN identity_schema_version v ON v.schema_id = s.id
+                LEFT JOIN schema_version_approval approval ON approval.schema_version_id = v.id
+                LEFT JOIN LATERAL (
+                    SELECT change_type
+                    FROM schema_version_change
+                    WHERE to_version_id = v.id
+                    LIMIT 1
+                ) version_change ON TRUE
+                %s
+                ORDER BY s.schema_name ASC, v.version_number DESC, v.created_at DESC
                 """.formatted(whereClause);
     }
 

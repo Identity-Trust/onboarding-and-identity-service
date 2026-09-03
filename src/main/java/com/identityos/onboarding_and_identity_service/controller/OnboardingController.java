@@ -153,6 +153,13 @@ public class OnboardingController {
         return ResponseEntity.ok(organizationRepository.findSchemas(organizationId, applicationId));
     }
 
+    @GetMapping("/organizations/{organizationId}/schemas/versions")
+    public ResponseEntity<List<IdentitySchemaVersionResponse>> listOrganizationSchemaVersions(
+            @PathVariable String organizationId,
+            @RequestParam(required = false) String schemaType) {
+        return ResponseEntity.ok(organizationRepository.findSchemaVersions(organizationId, schemaType));
+    }
+
     @PostMapping("/schemas/versions/{versionId}/approval")
     public ResponseEntity<Void> updateSchemaVersionApproval(
             @PathVariable String versionId,
